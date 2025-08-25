@@ -19,7 +19,7 @@ import {
   Receipt,
   FileDown
 } from 'lucide-react';
-import type { Product, CreateTransactionInput, PaymentMethod } from '../../../server/src/schema';
+import type { Product, CreateTransactionInput, PaymentMethod, TransactionWithItems } from '../../../server/src/schema';
 
 interface CartItem {
   product: Product;
@@ -35,6 +35,7 @@ function TransactionPage() {
   const [notes, setNotes] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [lastTransactionPrinted, setLastTransactionPrinted] = useState<TransactionWithItems | null>(null);
 
   const loadProducts = useCallback(async () => {
     try {
@@ -116,6 +117,96 @@ function TransactionPage() {
     return paymentMethod === 'cash' ? Math.max(0, paymentAmount - total) : 0;
   };
 
+  const getPaymentMethodLabel = (method: PaymentMethod): string => {
+    switch (method) {
+      case 'cash': return '💵 Tunai';
+      case 'transfer': return '🏦 Transfer';
+      case 'e_wallet': return '📱 E-Wallet';
+      default: return method;
+    }
+  };
+
+  const handlePrintReceipt = () => {
+    if (!lastTransactionPrinted) {
+      alert('Tidak ada transaksi untuk dicetak.');
+      return;
+    }
+
+    const { transaction_number, created_at, items, total_amount, payment_amount, change_amount, payment_method } = lastTransactionPrinted;
+
+    const receiptContent = `
+      <div style="font-family: 'monospace', monospace; width: 300px; padding: 10px; border: 1px solid #ccc; margin: auto;">
+        <h2 style="text-align: center; margin-bottom: 10px;">APLIKASI KASIR</h2>
+        <p style="text-align: center; border-bottom: 1px dashed #ccc; padding-bottom: 10px; margin-bottom: 10px;">
+          ------------------------------------
+        </p>
+        <p>No. Transaksi: <strong>${transaction_number}</strong></p>
+        <p>Tanggal: ${new Date(created_at).toLocaleDateString('id-ID')}</p>
+        <p>Waktu: ${new Date(created_at).toLocaleTimeString('id-ID')}</p>
+        <p style="border-bottom: 1px dashed #ccc; padding-bottom: 10px; margin-bottom: 10px;">
+          ------------------------------------
+        </p>
+        
+        <div style="margin-bottom: 10px;">
+          ${items.map(item => `
+            <div style="display: flex; justify-content: space-between;">
+              <span>${item.product_name} x ${item.quantity}</span>
+              <span>Rp ${item.total_price.toLocaleString('id-ID')}</span>
+            </div>
+            <div style="font-size: 0.8em; color: #555; text-align: right;">
+              (Rp ${item.unit_price.toLocaleString('id-ID')} / item)
+            </div>
+          `).join('')}
+        </div>
+        <p style="border-bottom: 1px dashed #ccc; padding-bottom: 10px; margin-bottom: 10px;">
+          ------------------------------------
+        </p>
+        <div style="display: flex; justify-content: space-between; font-weight: bold; margin-bottom: 5px;">
+          <span>TOTAL:</span>
+          <span>Rp ${total_amount.toLocaleString('id-ID')}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between;">
+          <span>Metode Bayar:</span>
+          <span>${getPaymentMethodLabel(payment_method)}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between;">
+          <span>Dibayar:</span>
+          <span>Rp ${payment_amount.toLocaleString('id-ID')}</span>
+        </div>
+        ${change_amount > 0 ? `
+        <div style="display: flex; justify-content: space-between; font-weight: bold; color: green; margin-top: 5px;">
+          <span>Kembalian:</span>
+          <span>Rp ${change_amount.toLocaleString('id-ID')}</span>
+        </div>
+        ` : ''}
+        <p style="border-top: 1px dashed #ccc; padding-top: 10px; margin-top: 10px; text-align: center;">
+          Terima Kasih Telah Berbelanja!
+        </p>
+      </div>
+    `;
+
+    const printWindow = window.open('', '_blank', 'height=600,width=400');
+    if (printWindow) {
+      printWindow.document.write('<html><head><title>Struk Transaksi</title>');
+      printWindow.document.write('<style>');
+      printWindow.document.write(`
+        body { margin: 0; padding: 0; font-size: 12px; }
+        .print-only { display: block; }
+        .no-print { display: none !important; }
+        @page { size: auto; margin: 10mm; }
+        h2 { font-size: 1.2em; }
+      `);
+      printWindow.document.write('</style></head><body>');
+      printWindow.document.write(receiptContent);
+      printWindow.document.write('</body></html>');
+      printWindow.document.close();
+      printWindow.focus();
+      printWindow.print();
+    } else {
+      alert('Gagal membuka jendela cetak. Pastikan pop-up diizinkan.');
+    }
+  };
+
   const handleTransaction = async () => {
     if (cart.length === 0) {
       alert('Keranjang kosong');
@@ -140,7 +231,8 @@ function TransactionPage() {
         notes: notes || null
       };
 
-      await trpc.createTransaction.mutate(transactionData);
+      const completedTransaction = await trpc.createTransaction.mutate(transactionData);
+      setLastTransactionPrinted(completedTransaction);
       
       // Reset form
       setCart([]);
@@ -151,9 +243,10 @@ function TransactionPage() {
       // Reload products to update stock
       loadProducts();
       
-      alert('Transaksi berhasil! 🎉');
+      alert('Transaksi berhasil! 🥳');
     } catch (error) {
       console.error('Failed to create transaction:', error);
+      setLastTransactionPrinted(null);
       alert('Gagal membuat transaksi');
     } finally {
       setIsLoading(false);
@@ -386,13 +479,22 @@ function TransactionPage() {
                   {isLoading ? '⏳ Proses...' : '✅ Bayar'}
                 </Button>
                 
-                <Button variant="outline" disabled={isLoading}>
+                <Button 
+                  variant="outline" 
+                  onClick={handlePrintReceipt}
+                  disabled={isLoading || !lastTransactionPrinted}
+                >
                   <Receipt className="h-4 w-4 mr-1" />
                   📄 Cetak Struk
                 </Button>
               </div>
               
-              <Button variant="ghost" className="w-full" disabled={isLoading}>
+              <Button 
+                variant="ghost" 
+                className="w-full" 
+                onClick={handlePrintReceipt}
+                disabled={isLoading || !lastTransactionPrinted}
+              >
                 <FileDown className="h-4 w-4 mr-1" />
                 💾 Simpan PDF
               </Button>
